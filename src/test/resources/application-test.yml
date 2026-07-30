@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:urlshortener-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+
+app:
+  base-url: http://localhost:8080
+  short-code-length: 8
+  jwt:
+    secret: VGhpcy1pcy1hLXRlc3Qtb25seS1qd3Qtc2VjcmV0LWtleS1vdmVyLTMyLWJ5dGVz
+    expiration: PT1H
