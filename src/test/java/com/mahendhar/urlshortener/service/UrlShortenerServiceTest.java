@@ -19,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,16 +38,22 @@ class UrlShortenerServiceTest {
     @Mock
     ShortCodeGenerator shortCodeGenerator;
 
+    @Mock
+    org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+
     AppProperties appProperties;
 
-    @InjectMocks
     UrlShortenerService urlShortenerService;
 
     @BeforeEach
     void setUp() {
         appProperties = new AppProperties("http://localhost:8080", 6, new AppProperties.Jwt("secret", Duration.ofHours(1)));
         // inject appProperties via constructor
-        urlShortenerService = new UrlShortenerService(shortUrlRepository, userRepository, shortCodeGenerator, appProperties);
+        urlShortenerService = new UrlShortenerService(shortUrlRepository, userRepository, shortCodeGenerator, appProperties, transactionTemplate);
+        when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            var callback = invocation.getArgument(0, org.springframework.transaction.support.TransactionCallback.class);
+            return callback.doInTransaction(null);
+        });
     }
 
     @Test
@@ -114,5 +121,51 @@ class UrlShortenerServiceTest {
 
         assertThat(resp.shortCode()).isEqualTo("BBB");
         verify(shortCodeGenerator, times(2)).generate(6);
+    }
+
+    @Test
+    void listGetAndDeactivateOnlyOperateOnTheAuthenticatedOwnersUrls() {
+        User owner = User.builder().id(3L).email("owner@example.com").build();
+        ShortUrl shortUrl = ShortUrl.builder().id(10L).originalUrl("https://example.com").shortCode("OWN123")
+                .clickCount(4).active(true).owner(owner).build();
+        when(shortUrlRepository.findAllByOwnerEmailOrderByCreatedAtDesc("owner@example.com"))
+                .thenReturn(List.of(shortUrl));
+        when(shortUrlRepository.findByShortCodeAndOwnerEmail("OWN123", "owner@example.com"))
+                .thenReturn(Optional.of(shortUrl));
+
+        assertThat(urlShortenerService.listForUser("OWNER@EXAMPLE.COM")).singleElement()
+                .extracting(response -> response.shortCode()).isEqualTo("OWN123");
+        assertThat(urlShortenerService.getForUser("OWN123", "owner@example.com").clickCount()).isEqualTo(4);
+
+        urlShortenerService.deactivate("OWN123", "owner@example.com");
+
+        assertThat(shortUrl.isActive()).isFalse();
+        verify(shortUrlRepository).save(shortUrl);
+    }
+
+    @Test
+    void createFailsAfterConfiguredCollisionRetries() {
+        User user = User.builder().id(4L).email("retry@example.com").build();
+        when(userRepository.findByEmail("retry@example.com")).thenReturn(Optional.of(user));
+        when(shortCodeGenerator.generate(6)).thenReturn("TAKEN");
+        when(shortUrlRepository.existsByShortCode("TAKEN")).thenReturn(true);
+
+        assertThatThrownBy(() -> urlShortenerService.create(
+                new CreateShortUrlRequest("https://example.com", null), "retry@example.com"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("unique short code");
+        verify(shortCodeGenerator, times(8)).generate(6);
+        verify(shortUrlRepository, never()).save(any());
+    }
+
+    @Test
+    void resolveRedirectDoesNotCountExpiredUrls() {
+        ShortUrl expired = ShortUrl.builder().id(7L).originalUrl("https://expired.example").shortCode("OLD123")
+                .clickCount(5).active(true).expiresAt(Instant.now().minusSeconds(1)).build();
+        when(shortUrlRepository.findByShortCode("OLD123")).thenReturn(Optional.of(expired));
+
+        assertThatThrownBy(() -> urlShortenerService.resolveRedirect("OLD123"))
+                .isInstanceOf(NotFoundException.class);
+        verify(shortUrlRepository, never()).save(any());
     }
 }

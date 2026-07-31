@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -67,5 +68,28 @@ class UrlControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(2))
                 .andExpect(jsonPath("$.shortCode").value("ZZZ999"));
+    }
+
+    @Test
+    void createWithInvalidUrlReturnsFieldLevelValidationDetails() throws Exception {
+        Principal p = () -> "user@example.com";
+
+        mockMvc.perform(post("/api/v1/urls")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"originalUrl\":\"not-a-url\"}")
+                        .principal(p))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Validation failed"))
+                .andExpect(jsonPath("$.validationErrors.originalUrl").exists());
+    }
+
+    @Test
+    void deleteDeactivatesUrlAndReturnsNoContent() throws Exception {
+        Principal p = () -> "user@example.com";
+
+        mockMvc.perform(delete("/api/v1/urls/ABC123").principal(p))
+                .andExpect(status().isNoContent());
+
+        Mockito.verify(urlShortenerService).deactivate("ABC123", "user@example.com");
     }
 }

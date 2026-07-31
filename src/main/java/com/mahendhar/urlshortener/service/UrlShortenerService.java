@@ -14,7 +14,11 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -28,23 +32,43 @@ public class UrlShortenerService {
     private final UserRepository userRepository;
     private final ShortCodeGenerator shortCodeGenerator;
     private final AppProperties appProperties;
+    private final TransactionTemplate transactionTemplate;
 
     @Transactional
     public ShortUrlResponse create(CreateShortUrlRequest request, String userEmail) {
-        log.info("Creating short URL for user {} originalUrl={}", userEmail, request.originalUrl());
+        log.info("Creating short URL for user {}", userEmail);
         User owner = userRepository.findByEmail(userEmail.toLowerCase())
                 .orElseThrow(() -> new NotFoundException("User not found"));
         ShortUrl shortUrl = ShortUrl.builder()
                 .originalUrl(request.originalUrl())
-                .shortCode(generateUniqueCode())
                 .clickCount(0)
                 .active(true)
                 .expiresAt(request.expiresAt())
                 .owner(owner)
                 .build();
-        ShortUrl saved = shortUrlRepository.save(shortUrl);
+        ShortUrl saved = saveWithRetry(shortUrl);
         log.debug("Saved short URL id={} code={}", saved.getId(), saved.getShortCode());
         return toResponse(saved);
+    }
+
+    private ShortUrl saveWithRetry(ShortUrl shortUrl) {
+        for (int attempt = 1; attempt <= MAX_CODE_GENERATION_ATTEMPTS; attempt++) {
+            shortUrl.setShortCode(generateUniqueCode());
+            try {
+                return saveAndFlushInNewTransaction(shortUrl);
+            } catch (DataIntegrityViolationException ex) {
+                log.warn("Short code collision on save attempt {} for code={}. Retrying.", attempt, shortUrl.getShortCode());
+                if (attempt == MAX_CODE_GENERATION_ATTEMPTS) {
+                    log.error("Unable to save a unique short URL after {} attempts", MAX_CODE_GENERATION_ATTEMPTS);
+                    throw new IllegalStateException("Unable to save a unique short code");
+                }
+            }
+        }
+        throw new IllegalStateException("Unable to save a unique short code");
+    }
+
+    private ShortUrl saveAndFlushInNewTransaction(ShortUrl shortUrl) {
+        return transactionTemplate.execute(status -> shortUrlRepository.saveAndFlush(shortUrl));
     }
 
     @Transactional(readOnly = true)

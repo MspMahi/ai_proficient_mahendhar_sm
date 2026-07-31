@@ -26,7 +26,7 @@ public class RedirectController {
     public ResponseEntity<Void> redirect(@PathVariable String code, HttpServletResponse response) {
         log.info("Redirect requested for code={}", code);
         String targetUrl = urlShortenerService.resolveRedirect(code);
-        log.debug("Redirecting code={} to {}", code, targetUrl);
+        log.debug("Redirecting code={}", code);
         return ResponseEntity.status(HttpStatus.FOUND)
                 .header(HttpHeaders.LOCATION, targetUrl)
                 .build();

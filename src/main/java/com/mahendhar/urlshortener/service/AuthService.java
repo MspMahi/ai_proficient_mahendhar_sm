@@ -34,7 +34,9 @@ public class AuthService {
     @Transactional
     public AuthResponse register(RegisterRequest request) {
         String email = request.email().toLowerCase();
+        log.info("Registering user {}", email);
         if (userRepository.existsByEmail(email)) {
+            log.warn("Registration rejected because email already exists: {}", email);
             throw new ConflictException("Email is already registered");
         }
 
@@ -52,6 +54,7 @@ public class AuthService {
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
         String email = request.email().toLowerCase();
+        log.info("Authenticating user {}", email);
         authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(email, request.password()));
         User user = userRepository.findByEmail(email).orElseThrow();
         UserDetails userDetails = userDetailsService.loadUserByUsername(email);
